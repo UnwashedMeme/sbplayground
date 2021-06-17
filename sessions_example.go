@@ -27,6 +27,7 @@ var (
 	msgCountUpperBound = 8
 )
 
+// Create a new session with uuid identifier, random count and delay
 func sendSession(ctx context.Context, q *servicebus.Queue) error {
 	sessionuuid, err := uuid.NewV4()
 	if err != nil {
@@ -68,6 +69,7 @@ func sendSession(ctx context.Context, q *servicebus.Queue) error {
 	return nil
 }
 
+
 type SimpleSessionHandler struct {
 	messageSession *servicebus.MessageSession
 	SessionID      *string
@@ -77,7 +79,7 @@ type SimpleSessionHandler struct {
 // Start is called when a new session is started
 func (ssh *SimpleSessionHandler) Start(ms *servicebus.MessageSession) error {
 	ssh.messageSession = ms
-	ssh.SessionID = ms.SessionID() // This is always nil
+	ssh.SessionID = ms.SessionID() // This is always nil right now unless we patch session.go
 	ssh.log.Info().Msg("Begin SimpleSessionHandler")
 	return nil
 }
@@ -113,7 +115,7 @@ func (ssh *SimpleSessionHandler) Handle(ctx context.Context, msg *servicebus.Mes
 }
 
 func (ssh *SimpleSessionHandler) End() {
-	ssh.log.Info().Msg("Begin SimpleSessionHandler")
+	ssh.log.Info().Msg("End SimpleSessionHandler")
 }
 
 type MonitoredSessionHandler struct {
@@ -207,6 +209,30 @@ func receiveWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 	}
 }
 
+// A worker that reuses the same queueSession object
+func reuseSessionWorker(ctx context.Context, queue *servicebus.Queue) func() error {
+	return func() error {
+		log := ctx.Value("log").(zerolog.Logger)
+		queueSession := queue.NewSession(nil)
+		defer func() {
+			if err := queueSession.Close(context.TODO()); err != nil {
+				log.Err(err).Msg("queueSession.Close() failed")
+			}
+		}()
+
+		for {
+			log.Debug().Msgf("queueSession.ReceiveOne()")
+			ssh := &SimpleSessionHandler{}
+			if err := queueSession.ReceiveOne(ctx, ssh); err != nil {
+				log.Err(err).Msgf("queueSession.ReceiveOne()")
+				return err
+			}
+		}
+		return ctx.Err()
+	}
+}
+
+// Handle an individual queueSession by calling ReceiveOne, with autorenew monitoring
 func newMonitoredSessionHandler(ctx context.Context, queueSession *servicebus.QueueSession) error {
 	log := zerolog.Ctx(ctx)
 
@@ -248,6 +274,9 @@ func monitoredWorker(ctx context.Context, queue *servicebus.Queue) func() error 
 	}
 }
 
+// Reuse the queueSession object; this doesn't seem to work. the 2nd
+// time ReceiveOne is called it returns immediately with context already
+// cancelled.
 func monReuseWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 	return func() error {
 		log := zerolog.Ctx(ctx)
@@ -270,28 +299,6 @@ func monReuseWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 	}
 }
 
-// A worker that reuses the same queueSession object
-func reuseSessionWorker(ctx context.Context, queue *servicebus.Queue) func() error {
-	return func() error {
-		log := ctx.Value("log").(zerolog.Logger)
-		queueSession := queue.NewSession(nil)
-		defer func() {
-			if err := queueSession.Close(context.TODO()); err != nil {
-				log.Err(err).Msg("queueSession.Close() failed")
-			}
-		}()
-
-		for {
-			log.Debug().Msgf("queueSession.ReceiveOne()")
-			ssh := &SimpleSessionHandler{}
-			if err := queueSession.ReceiveOne(ctx, ssh); err != nil {
-				log.Err(err).Msgf("queueSession.ReceiveOne()")
-				return err
-			}
-		}
-		return ctx.Err()
-	}
-}
 
 func example_sessions(ctx context.Context) error {
 	t, ctx := tomb.WithContext(ctx)
