@@ -49,7 +49,7 @@ func (ssh *StepSessionHandler) End() {
 	fmt.Println("")
 }
 
-func main() {
+func main2() {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 
