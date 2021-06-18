@@ -19,12 +19,14 @@ import (
 	"gopkg.in/tomb.v2"
 )
 
-var (
-	sessionCount       = 10
-	receiverCount      = 3
-	msgdelaystddev     = 30.0
-	stopIfNothingFor   = 15
-	msgCountUpperBound = 8
+const (
+	sessionCount          = 10
+	receiverCount         = 3
+	msgdelaystddev        = 30.0
+	stopIfNothingFor      = 15
+	initialAutoRenewTimer = 30000
+	msgCountUpperBound    = 8
+	qPrefetchCount        = 5
 )
 
 // Create a new session with uuid identifier, random count and delay
@@ -68,7 +70,6 @@ func sendSession(ctx context.Context, q *servicebus.Queue) error {
 	log.Info().Msgf("Finished sending %v", msgcount)
 	return nil
 }
-
 
 type SimpleSessionHandler struct {
 	messageSession *servicebus.MessageSession
@@ -122,8 +123,7 @@ type MonitoredSessionHandler struct {
 	SimpleSessionHandler
 	// cancel           context.CancelFunc
 	// ctx              context.Context
-	lasthandled      time.Time
-	stopIfNothingFor time.Duration
+	lasthandled time.Time
 }
 
 func (msh *MonitoredSessionHandler) Start(ms *servicebus.MessageSession) error {
@@ -147,8 +147,9 @@ func (msh *MonitoredSessionHandler) Handle(ctx context.Context, msg *servicebus.
 
 func (msh *MonitoredSessionHandler) AutoRenew(ctx context.Context, cancel context.CancelFunc) error {
 	log := msh.log
-	lockRenewTimer := time.NewTicker(5 * time.Second)
-	noNewMessagesTimer := time.NewTimer(msh.stopIfNothingFor)
+
+	lockRenewTimer := time.NewTicker(initialAutoRenewTimer * time.Second) //make it never fire right now
+	noNewMessagesTimer := time.NewTimer(stopIfNothingFor)
 	rounder := time.Second
 	for {
 		select {
@@ -168,8 +169,7 @@ func (msh *MonitoredSessionHandler) AutoRenew(ctx context.Context, cancel contex
 				lockRenewTimer.Reset(lockduration.Truncate(rounder))
 			}
 		case <-noNewMessagesTimer.C:
-			d := time.Until(msh.lasthandled.Add(msh.stopIfNothingFor))
-			//d := msh.lasthandled.Add(msh.stopIfNothingFor).Sub(time.Now())
+			d := time.Until(msh.lasthandled.Add(stopIfNothingFor * time.Second))
 			if d.Seconds() < 0 {
 				log.Info().Msg("No new messages, closing MonitoredSessionHandler")
 				cancel()
@@ -243,8 +243,7 @@ func newMonitoredSessionHandler(ctx context.Context, queueSession *servicebus.Qu
 		SimpleSessionHandler: SimpleSessionHandler{
 			log: log.With().Logger(),
 		},
-		stopIfNothingFor: time.Duration(stopIfNothingFor) * time.Second,
-		lasthandled:      time.Now(),
+		lasthandled: time.Now(),
 	}
 	go msh.AutoRenew(mshctx, cancel)
 	err := queueSession.ReceiveOne(mshctx, msh)
@@ -299,7 +298,6 @@ func monReuseWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 	}
 }
 
-
 func example_sessions(ctx context.Context) error {
 	t, ctx := tomb.WithContext(ctx)
 
@@ -314,7 +312,7 @@ func example_sessions(ctx context.Context) error {
 		return err
 	}
 
-	q, err := ns.NewQueue("fooshort", servicebus.QueueWithPrefetchCount(4))
+	q, err := ns.NewQueue("fooshort", servicebus.QueueWithPrefetchCount(qPrefetchCount))
 	//q, err := ns.NewQueue("fooshort")
 	if err != nil {
 		return err
