@@ -146,7 +146,6 @@ func (msh *MonitoredSessionHandler) Handle(ctx context.Context, msg *servicebus.
 }
 
 func (msh *MonitoredSessionHandler) AutoRenew(ctx context.Context, cancel context.CancelFunc) error {
-	log := msh.log
 
 	lockRenewTimer := time.NewTicker(initialAutoRenewTimer * time.Second) //make it never fire right now
 	noNewMessagesTimer := time.NewTimer(stopIfNothingFor)
@@ -156,28 +155,27 @@ func (msh *MonitoredSessionHandler) AutoRenew(ctx context.Context, cancel contex
 		case <-lockRenewTimer.C:
 			if msh.messageSession != nil && msh.messageSession.SessionID() != nil {
 				if err := msh.messageSession.RenewLock(ctx); err != nil {
-					log.Err(err).Msgf("Renewlock() failed")
+					msh.log.Err(err).Msgf("Renewlock() failed")
 					msh.messageSession.Close()
 					return err
 				} else {
 					remaininglock := time.Until(msh.messageSession.LockedUntil())
-					logd := log.With().Str("remaininglock", remaininglock.String()).Logger()
+					logd := msh.log.With().Str("remaininglock", remaininglock.String()).Logger()
 					logd.Debug().Msg("lock renewed")
 				}
 				lockduration := time.Until(msh.messageSession.LockedUntil())
-				//log.Debug().Msgf("%v renewed lock, good for another %v", msh, lockduration)
 				lockRenewTimer.Reset(lockduration.Truncate(rounder))
 			}
 		case <-noNewMessagesTimer.C:
 			d := time.Until(msh.lasthandled.Add(stopIfNothingFor * time.Second))
 			if d.Seconds() < 0 {
-				log.Info().Msg("No new messages, closing MonitoredSessionHandler")
+				msh.log.Info().Msg("No new messages, closing MonitoredSessionHandler")
 				cancel()
 			} else {
 				noNewMessagesTimer.Reset(d)
 			}
 		case <-ctx.Done():
-			log.Info().Msg("stopping autorenew loop")
+			msh.log.Info().Msg("stopping autorenew loop")
 			lockRenewTimer.Stop()
 			if !noNewMessagesTimer.Stop() {
 				<-noNewMessagesTimer.C
