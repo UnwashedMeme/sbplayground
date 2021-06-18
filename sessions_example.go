@@ -92,10 +92,6 @@ func (ssh *SimpleSessionHandler) Handle(ctx context.Context, msg *servicebus.Mes
 	if ssh.SessionID == nil {
 		ssh.SessionID = msg.SessionID
 	}
-	remaininglock := time.Until(ssh.messageSession.LockedUntil())
-	logd := log.With().Str("remaininglock", remaininglock.String()).Logger()
-	logd.Info().Msgf("msg=\"%s\"", string(msg.Data))
-
 	//if we don't hold the lock renew it before handling the message
 	if ssh.messageSession.LockedUntil().Before(time.Now()) {
 		if err := ssh.messageSession.RenewLock(ctx); err != nil {
@@ -103,6 +99,10 @@ func (ssh *SimpleSessionHandler) Handle(ctx context.Context, msg *servicebus.Mes
 			return err
 		}
 	}
+
+	remaininglock := time.Until(ssh.messageSession.LockedUntil())
+	logd := log.With().Str("remaininglock", remaininglock.String()).Logger()
+	logd.Info().Msgf("msg=\"%s\"", string(msg.Data))
 
 	// if ssh.messageSession.LockedUntil().Before(time.Now()) {
 	// 	log.Info().Msgf("Closing expired session")
