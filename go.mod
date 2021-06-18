@@ -15,3 +15,8 @@ require (
 	gopkg.in/tomb.v2 v2.0.0-20161208151619-d5d1b5820637
 	nhooyr.io/websocket v1.8.7 // indirect
 )
+
+replace (
+	github.com/Azure/azure-service-bus-go v0.10.12 => github.com/jhendrixMSFT/azure-service-bus-go v0.10.2-0.20210617233716-ea9f762b6212
+	github.com/Azure/go-amqp v0.13.7 => github.com/jhendrixMSFT/go-amqp v0.12.7-0.20210617221052-6e466f4fba8a
+)
