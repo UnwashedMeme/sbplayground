@@ -218,7 +218,7 @@ func reuseSessionWorker(ctx context.Context, queue *servicebus.Queue) func() err
 			}
 		}()
 
-		for {
+		for ctx.Err() != nil {
 			log.Debug().Msgf("queueSession.ReceiveOne()")
 			ssh := &SimpleSessionHandler{}
 			if err := queueSession.ReceiveOne(ctx, ssh); err != nil {
