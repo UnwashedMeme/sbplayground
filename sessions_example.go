@@ -216,30 +216,6 @@ func receiveWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 	}
 }
 
-// A worker that reuses the same queueSession object
-//lint:ignore U1000 I swap out which functions I want to use
-func reuseSessionWorker(ctx context.Context, queue *servicebus.Queue) func() error {
-	return func() error {
-		log := ctx.Value("log").(zerolog.Logger)
-		queueSession := queue.NewSession(nil)
-		defer func() {
-			if err := queueSession.Close(context.TODO()); err != nil {
-				log.Err(err).Msg("queueSession.Close() failed")
-			}
-		}()
-
-		for ctx.Err() != nil {
-			log.Debug().Msgf("queueSession.ReceiveOne()")
-			ssh := &SimpleSessionHandler{}
-			if err := queueSession.ReceiveOne(ctx, ssh); err != nil {
-				log.Err(err).Msgf("queueSession.ReceiveOne()")
-				return err
-			}
-		}
-		return ctx.Err()
-	}
-}
-
 // Handle an individual queueSession by calling ReceiveOne, with autorenew monitoring
 func newMonitoredSessionHandler(ctx context.Context, queueSession *servicebus.QueueSession) error {
 	log := zerolog.Ctx(ctx)
@@ -283,6 +259,8 @@ func monitoredWorker(ctx context.Context, queue *servicebus.Queue) func() error 
 	}
 }
 
+// This doesn't work because the queueSession and its receiver becomes bound to particular sessionId
+// during the first ReceiveOne-- from that point forward it stops behaving as NewSession(nil)
 //lint:ignore U1000 I swap out which functions I want to use
 func monReuseWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 	return func() error {
