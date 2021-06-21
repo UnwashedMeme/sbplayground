@@ -17,6 +17,8 @@ require (
 )
 
 replace (
-	github.com/Azure/azure-service-bus-go v0.10.12 => github.com/jhendrixMSFT/azure-service-bus-go v0.10.2-0.20210617233716-ea9f762b6212
+	// github.com/Azure/azure-service-bus-go => github.com/jhendrixMSFT/azure-service-bus-go nil_sessionid
+	github.com/Azure/azure-service-bus-go => github.com/jhendrixMSFT/azure-service-bus-go v0.10.2-0.20210618212838-7ab4d5b8ae63
+	// github.com/Azure/go-amqp v0.13.7 => github.com/jhendrixMSFT/go-amqp linksourcefilter
 	github.com/Azure/go-amqp v0.13.7 => github.com/jhendrixMSFT/go-amqp v0.12.7-0.20210617221052-6e466f4fba8a
 )

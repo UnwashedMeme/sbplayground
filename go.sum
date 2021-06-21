@@ -69,8 +69,8 @@ github.com/google/go-cmp v0.5.1/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/
 github.com/google/gofuzz v1.0.0/go.mod h1:dBl0BpW6vV/+mYPU4Po3pmUjxk6FQPldtuIdl/M65Eg=
 github.com/gorilla/websocket v1.4.1 h1:q7AeDBpnBk8AogcD4DSag/Ukw/KV+YhzLj2bP5HvKCM=
 github.com/gorilla/websocket v1.4.1/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
-github.com/jhendrixMSFT/azure-service-bus-go v0.10.2-0.20210617233716-ea9f762b6212 h1:7qlPLa0ULlpj2ypSF1zYH+XaTrV6ls8z4D3WOJA+fvQ=
-github.com/jhendrixMSFT/azure-service-bus-go v0.10.2-0.20210617233716-ea9f762b6212/go.mod h1:C9qndJzRFs3nc5nsjBchLrK5nlfS9xmLMPcMDOmkvhM=
+github.com/jhendrixMSFT/azure-service-bus-go v0.10.2-0.20210618212838-7ab4d5b8ae63 h1:gYtKuYspTrWFMV/gQCiwSJsss7FastF8E8AxpwAukak=
+github.com/jhendrixMSFT/azure-service-bus-go v0.10.2-0.20210618212838-7ab4d5b8ae63/go.mod h1:C9qndJzRFs3nc5nsjBchLrK5nlfS9xmLMPcMDOmkvhM=
 github.com/jhendrixMSFT/go-amqp v0.12.7-0.20210617221052-6e466f4fba8a h1:G/mcZBujWLMH2tz7zPbatWs9/gCJEKWN0pw0Up3t4k4=
 github.com/jhendrixMSFT/go-amqp v0.12.7-0.20210617221052-6e466f4fba8a/go.mod h1:wbpCKA8tR5MLgRyIu+bb+S6ECdIDdYJ0NlpFE9xsBPI=
 github.com/joho/godotenv v1.3.0 h1:Zjp+RcGpHhGlrMbJzXTrZZPrWj+1vfm90La1wgB6Bhc=
