@@ -20,13 +20,14 @@ import (
 )
 
 const (
-	sessionCount          = 10
-	receiverCount         = 3
-	msgdelaystddev        = 30.0
-	stopIfNothingFor      = 15
-	initialAutoRenewTimer = 30000
-	msgCountUpperBound    = 8
-	qPrefetchCount        = 5
+	// all times in in seconds
+	sessionCount         = 3
+	receiverCount        = 2
+	msgdelaystddev       = 3.0
+	initialAutoRenewPoll = 10
+	noNewSessionsTimeout = 20
+	msgCountUpperBound   = 8
+	qPrefetchCount       = 5
 )
 
 // Create a new session with uuid identifier, random count and delay
@@ -85,6 +86,10 @@ func (ssh *SimpleSessionHandler) Start(ms *servicebus.MessageSession) error {
 	return nil
 }
 
+func (ssh *SimpleSessionHandler) End() {
+	ssh.log.Info().Msg("End SimpleSessionHandler")
+}
+
 // Handle is called when a new session message is received
 func (ssh *SimpleSessionHandler) Handle(ctx context.Context, msg *servicebus.Message) error {
 
@@ -93,7 +98,9 @@ func (ssh *SimpleSessionHandler) Handle(ctx context.Context, msg *servicebus.Mes
 		ssh.SessionID = msg.SessionID
 	}
 	//if we don't hold the lock renew it before handling the message
-	if ssh.messageSession.LockedUntil().Before(time.Now()) {
+	lockdate := ssh.messageSession.LockedUntil()
+	if lockdate.Before(time.Now()) {
+		log.Debug().Str("lockremaining", time.Until(lockdate).String()).Msg("manual renew on message")
 		if err := ssh.messageSession.RenewLock(ctx); err != nil {
 			log.Err(err).Msgf("Renewlock() failed")
 			return err
@@ -101,22 +108,13 @@ func (ssh *SimpleSessionHandler) Handle(ctx context.Context, msg *servicebus.Mes
 	}
 
 	remaininglock := time.Until(ssh.messageSession.LockedUntil())
-	logd := log.With().Str("remaininglock", remaininglock.String()).Logger()
-	logd.Info().Msgf("msg=\"%s\"", string(msg.Data))
+	log = log.With().Str("remaininglock", remaininglock.String()).Logger()
+	log.Info().Msgf("msg=\"%s\"", string(msg.Data))
 
-	// if ssh.messageSession.LockedUntil().Before(time.Now()) {
-	// 	log.Info().Msgf("Closing expired session")
-	// 	ssh.messageSession.Close()
-	// }
 	if strings.Contains(string(msg.Data), "Shutdown") {
-		ssh.messageSession.Close()
+		defer ssh.messageSession.Close()
 	}
-
 	return msg.Complete(ctx)
-}
-
-func (ssh *SimpleSessionHandler) End() {
-	ssh.log.Info().Msg("End SimpleSessionHandler")
 }
 
 type MonitoredSessionHandler struct {
@@ -128,13 +126,18 @@ type MonitoredSessionHandler struct {
 
 func (msh *MonitoredSessionHandler) Start(ms *servicebus.MessageSession) error {
 	if ms.SessionID() != nil {
-		//will be nil unless you patch session.go
-		msh.log = msh.log.With().Str("SID", *ms.SessionID()).Logger()
+		msh.log.UpdateContext(func(c zerolog.Context) zerolog.Context {
+			return c.Str("SID", *ms.SessionID())
+		})
 	} else {
-		msh.log.Warn().Msg("Start MSH with no SessionID")
+		return fmt.Errorf("nil sessionid")
 	}
-
+	msh.lasthandled = time.Now()
 	return msh.SimpleSessionHandler.Start(ms)
+}
+
+func (msh *MonitoredSessionHandler) End() {
+	msh.log.Info().Msg("MonitoredSessionHandler shutdown")
 }
 
 func (msh *MonitoredSessionHandler) Handle(ctx context.Context, msg *servicebus.Message) error {
@@ -145,46 +148,52 @@ func (msh *MonitoredSessionHandler) Handle(ctx context.Context, msg *servicebus.
 	return nil
 }
 
-func (msh *MonitoredSessionHandler) AutoRenew(ctx context.Context, cancel context.CancelFunc) error {
-
-	lockRenewTimer := time.NewTicker(initialAutoRenewTimer * time.Second) //make it never fire right now
-	noNewMessagesTimer := time.NewTimer(stopIfNothingFor)
-	rounder := time.Second
+func (msh *MonitoredSessionHandler) AutoRenew(ctx context.Context) error {
+	lockRenewTimer := time.NewTimer(time.Second * initialAutoRenewPoll)
+	noNewMessagesTimer := time.NewTimer(time.Second * noNewSessionsTimeout)
 	for {
 		select {
 		case <-lockRenewTimer.C:
-			if msh.messageSession != nil && msh.messageSession.SessionID() != nil {
+			msh.log.Debug().Msg("Renewing lock")
+			if msh.messageSession != nil {
 				if err := msh.messageSession.RenewLock(ctx); err != nil {
 					msh.log.Err(err).Msgf("Renewlock() failed")
 					msh.messageSession.Close()
 					return err
-				} else {
-					remaininglock := time.Until(msh.messageSession.LockedUntil())
-					logd := msh.log.With().Str("remaininglock", remaininglock.String()).Logger()
-					logd.Debug().Msg("lock renewed")
 				}
-				lockduration := time.Until(msh.messageSession.LockedUntil())
-				lockRenewTimer.Reset(lockduration.Truncate(rounder))
+				lockRenewTimer.Reset(time.Until(msh.messageSession.LockedUntil()))
+			} else {
+				lockRenewTimer.Reset(time.Second * initialAutoRenewPoll)
 			}
+
 		case <-noNewMessagesTimer.C:
-			d := time.Until(msh.lasthandled.Add(stopIfNothingFor * time.Second))
+			if msh.messageSession == nil {
+				msh.log.Warn().Msg("No session started")
+				return fmt.Errorf("no new session")
+			}
+			// In case the `Shutdown` message never got sent
+			d := time.Until(msh.lasthandled.Add(noNewSessionsTimeout * time.Second))
 			if d.Seconds() < 0 {
 				msh.log.Info().Msg("No new messages, closing MonitoredSessionHandler")
-				cancel()
+				msh.messageSession.Close()
+
 			} else {
 				noNewMessagesTimer.Reset(d)
 			}
 		case <-ctx.Done():
-			msh.log.Info().Msg("stopping autorenew loop")
-			lockRenewTimer.Stop()
 			if !noNewMessagesTimer.Stop() {
 				<-noNewMessagesTimer.C
+			}
+			if !lockRenewTimer.Stop() {
+				<-lockRenewTimer.C
 			}
 			return ctx.Err()
 		}
 	}
 }
 
+// A basic worker
+//lint:ignore U1000 I swap out which functions I want to use
 func receiveWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 	return func() error {
 		log := zerolog.Ctx(ctx)
@@ -208,6 +217,7 @@ func receiveWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 }
 
 // A worker that reuses the same queueSession object
+//lint:ignore U1000 I swap out which functions I want to use
 func reuseSessionWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 	return func() error {
 		log := ctx.Value("log").(zerolog.Logger)
@@ -234,46 +244,46 @@ func reuseSessionWorker(ctx context.Context, queue *servicebus.Queue) func() err
 func newMonitoredSessionHandler(ctx context.Context, queueSession *servicebus.QueueSession) error {
 	log := zerolog.Ctx(ctx)
 
-	log.Debug().Msgf("queueSession.ReceiveOne()")
-	mshctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	tomb, mshctx := tomb.WithContext(ctx)
+	defer tomb.Kill(context.Canceled)
 	msh := &MonitoredSessionHandler{
 		SimpleSessionHandler: SimpleSessionHandler{
 			log: log.With().Logger(),
 		},
-		lasthandled: time.Now(),
 	}
-	go msh.AutoRenew(mshctx, cancel)
-	err := queueSession.ReceiveOne(mshctx, msh)
-	if err != nil {
-		log.Err(err).Msgf("queueSession.ReceiveOne() failed")
-	}
-	return err
+	tomb.Go(func() error { return msh.AutoRenew(mshctx) })
+	log.Debug().Msgf("queueSession.ReceiveOne()")
+	return queueSession.ReceiveOne(mshctx, msh)
+
 }
 
 // a worker that is a MonitoredSessionHandler with lock autorenew
+//lint:ignore U1000 I swap out which functions I want to use
 func monitoredWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 	return func() error {
 		log := zerolog.Ctx(ctx)
 		for ctx.Err() == nil {
+			//log.Debug().Msg("monitoredWorker top of loop")
 			queueSession := queue.NewSession(nil)
 			err := newMonitoredSessionHandler(ctx, queueSession)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				log.Err(err).Msg("Failed")
-			}
+
 			ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
 			defer cancel()
 			if err := queueSession.Close(ctx); err != nil {
 				log.Err(err).Msg("queueSession.Close() failed")
 			}
+
+			if err != nil {
+				log.Err(err).Msg("Failed")
+				return err
+			}
+
 		}
 		return ctx.Err()
 	}
 }
 
-// Reuse the queueSession object; this doesn't seem to work. the 2nd
-// time ReceiveOne is called it returns immediately with context already
-// cancelled.
+//lint:ignore U1000 I swap out which functions I want to use
 func monReuseWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 	return func() error {
 		log := zerolog.Ctx(ctx)
@@ -287,7 +297,7 @@ func monReuseWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 		}()
 		for ctx.Err() == nil {
 			err := newMonitoredSessionHandler(ctx, queueSession)
-			if err != nil && !errors.Is(err, context.Canceled) {
+			if err != nil {
 				log.Err(err).Msg("Failed")
 				return err
 			}
@@ -319,8 +329,8 @@ func example_sessions(ctx context.Context) error {
 	for i := 1; i <= receiverCount; i++ {
 		log := log.With().Int("Worker", i).Logger()
 		ctx := log.WithContext(ctx)
-		t.Go(monitoredWorker(ctx, q))
-		//t.Go(monReuseWorker(ctx, q))
+		//t.Go(monitoredWorker(ctx, q))
+		t.Go(monReuseWorker(ctx, q))
 		//t.Go(receiveWorker(ctx, q))
 	}
 	log.Debug().Msgf("Starting %v sessions", sessionCount)
