@@ -117,6 +117,15 @@ func (ssh *SimpleSessionHandler) Handle(ctx context.Context, msg *servicebus.Mes
 	return msg.Complete(ctx)
 }
 
+func receiveWithSimpleSession(ctx context.Context, queueSession *servicebus.QueueSession) error {
+	log := zerolog.Ctx(ctx)
+	ssh := &SimpleSessionHandler{
+		log: *log,
+	}
+	log.Debug().Msgf("queueSession.ReceiveOne()")
+	return queueSession.ReceiveOne(ctx, ssh)
+}
+
 type MonitoredSessionHandler struct {
 	SimpleSessionHandler
 	// cancel           context.CancelFunc
@@ -192,32 +201,8 @@ func (msh *MonitoredSessionHandler) AutoRenew(ctx context.Context) error {
 	}
 }
 
-// A basic worker
-//lint:ignore U1000 I swap out which functions I want to use
-func receiveWorker(ctx context.Context, queue *servicebus.Queue) func() error {
-	return func() error {
-		log := zerolog.Ctx(ctx)
-		for ctx.Err() != nil {
-			queueSession := queue.NewSession(nil)
-			ssh := &SimpleSessionHandler{
-				log: *log,
-			}
-			log.Debug().Msg("queueSession.ReceiveOne()")
-			if err := queueSession.ReceiveOne(ctx, ssh); err != nil && !errors.Is(err, context.Canceled) {
-				log.Err(err).Msg("queueSession.ReceiveOne() failed")
-				return err
-			}
-			if err := queueSession.Close(ctx); err != nil {
-				log.Err(err).Msg("queueSession.Close() failed")
-				return err
-			}
-		}
-		return ctx.Err()
-	}
-}
-
 // Handle an individual queueSession by calling ReceiveOne, with autorenew monitoring
-func newMonitoredSessionHandler(ctx context.Context, queueSession *servicebus.QueueSession) error {
+func receiveWithMonitoredSession(ctx context.Context, queueSession *servicebus.QueueSession) error {
 	log := zerolog.Ctx(ctx)
 
 	tomb, mshctx := tomb.WithContext(ctx)
@@ -233,15 +218,16 @@ func newMonitoredSessionHandler(ctx context.Context, queueSession *servicebus.Qu
 
 }
 
+type CreateSessionHandlerAndReceive = func(context.Context, *servicebus.QueueSession) error
+
 // a worker that is a MonitoredSessionHandler with lock autorenew
 //lint:ignore U1000 I swap out which functions I want to use
-func monitoredWorker(ctx context.Context, queue *servicebus.Queue) func() error {
+func worker(ctx context.Context, queue *servicebus.Queue, handler CreateSessionHandlerAndReceive) func() error {
 	return func() error {
 		log := zerolog.Ctx(ctx)
 		for ctx.Err() == nil {
-			//log.Debug().Msg("monitoredWorker top of loop")
 			queueSession := queue.NewSession(nil)
-			err := newMonitoredSessionHandler(ctx, queueSession)
+			err := handler(ctx, queueSession)
 
 			ctx, cancel := context.WithTimeout(context.TODO(), 5*time.Second)
 			defer cancel()
@@ -253,7 +239,6 @@ func monitoredWorker(ctx context.Context, queue *servicebus.Queue) func() error 
 				log.Err(err).Msg("Failed")
 				return err
 			}
-
 		}
 		return ctx.Err()
 	}
@@ -262,7 +247,7 @@ func monitoredWorker(ctx context.Context, queue *servicebus.Queue) func() error 
 // This doesn't work because the queueSession and its receiver becomes bound to particular sessionId
 // during the first ReceiveOne-- from that point forward it stops behaving as NewSession(nil)
 //lint:ignore U1000 I swap out which functions I want to use
-func monReuseWorker(ctx context.Context, queue *servicebus.Queue) func() error {
+func reuseWorker(ctx context.Context, queue *servicebus.Queue, handler CreateSessionHandlerAndReceive) func() error {
 	return func() error {
 		log := zerolog.Ctx(ctx)
 		queueSession := queue.NewSession(nil)
@@ -274,7 +259,7 @@ func monReuseWorker(ctx context.Context, queue *servicebus.Queue) func() error {
 			}
 		}()
 		for ctx.Err() == nil {
-			err := newMonitoredSessionHandler(ctx, queueSession)
+			err := handler(ctx, queueSession)
 			if err != nil {
 				log.Err(err).Msg("Failed")
 				return err
@@ -307,9 +292,8 @@ func example_sessions(ctx context.Context) error {
 	for i := 1; i <= receiverCount; i++ {
 		log := log.With().Int("Worker", i).Logger()
 		ctx := log.WithContext(ctx)
-		//t.Go(monitoredWorker(ctx, q))
-		t.Go(monReuseWorker(ctx, q))
-		//t.Go(receiveWorker(ctx, q))
+		t.Go(worker(ctx, q, receiveWithMonitoredSession))
+		//t.Go(reuseWorker(ctx, q, receiveWithMonitoredSession))
 	}
 	log.Debug().Msgf("Starting %v sessions", sessionCount)
 	for i := 0; i < sessionCount; i++ {
